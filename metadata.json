@@ -1,0 +1,5 @@
+{
+  "name": "Ghep Anh Theo Thoi Gian Thuc",
+  "description": "An application to visualize a video timeline from a sequence of numbered images and a CSV file of start times. Upload your images (e.g., 1.png, 2.png) and a CSV file to generate and preview the timeline.",
+  "requestFramePermissions": []
+}
