@@ -1,7 +1,10 @@
+
+
+
 /// <reference lib="dom" />
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { TimelineClip, CsvRow } from './types';
+import { TimelineClip, CsvRow, ZoomEffect, TransitionEffect } from './types';
 import { FileUploader } from './components/FileUploader';
 import { Timeline } from './components/Timeline';
 import { Preview } from './components/Preview';
@@ -23,6 +26,8 @@ function App() {
   const [renderProgress, setRenderProgress] = useState<number>(0);
   const [supportedVideoFormat, setSupportedVideoFormat] = useState({ mimeType: 'video/webm; codecs=vp9', extension: 'webm' });
   const [useGreenScreen, setUseGreenScreen] = useState<boolean>(false);
+  const [zoomEffect, setZoomEffect] = useState<ZoomEffect>('none');
+  const [transitionEffect, setTransitionEffect] = useState<TransitionEffect>('none');
   
   const animationFrameRef = useRef<number | undefined>(undefined);
   const lastTimeRef = useRef<number | undefined>(undefined);
@@ -247,42 +252,131 @@ function App() {
             clipImageMap.set(clip.id, images[index]);
         });
 
-        const findClipForTime = (time: number): HTMLImageElement | null => {
-            let clip = timelineClips.find(c => time >= c.start && time < c.end);
-            
-            // Edge case: If the time is exactly the total duration, it should show the last clip.
-            if (!clip && time === totalDuration && timelineClips.length > 0) {
-                clip = timelineClips[timelineClips.length - 1];
-            }
-            
-            return clip ? clipImageMap.get(clip.id) || null : null;
-        };
-        
-        const drawFrame = (imageToDraw: HTMLImageElement | null, lastDrawnImage: HTMLImageElement | null) => {
+        const drawFrame = (time: number) => {
             ctx.fillStyle = backgroundColor;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+            const transitionDuration = transitionEffect !== 'none' ? Math.min(500, ...timelineClips.map(c => c.duration / 2)) : 0;
             
-            const image = imageToDraw || lastDrawnImage;
+            let currentClip = timelineClips.find(c => time >= c.start && time < c.end);
+            if (!currentClip && time === totalDuration && timelineClips.length > 0) {
+                currentClip = timelineClips[timelineClips.length - 1];
+            }
+            
+            if (!currentClip) return; // Nothing to draw
+        
+            const drawImageWithEffect = (img: HTMLImageElement, clip: TimelineClip, time: number, alpha: number = 1, offsetX: number = 0) => {
+                 if (!img) return;
+        
+                 ctx.save();
+                 ctx.globalAlpha = alpha;
+                 
+                 const progress = Math.max(0, Math.min(1, (time - clip.start) / clip.duration));
+        
+                 const canvasAspect = canvas.width / canvas.height;
+                 const imageAspect = img.naturalWidth / img.naturalHeight;
+        
+                 let baseScale: number;
+                 if (zoomEffect === 'none') {
+                     if (canvasAspect > imageAspect) baseScale = canvas.height / img.naturalHeight;
+                     else baseScale = canvas.width / img.naturalWidth;
+                 } else {
+                     if (canvasAspect > imageAspect) baseScale = canvas.width / img.naturalWidth;
+                     else baseScale = canvas.height / img.naturalHeight;
+                 }
+                 
+                 let zoom = 1.0;
+                 let panX = 0;
+        
+                 switch(zoomEffect) {
+                     case 'zoom-in': zoom = 1.0 + progress * 0.1; break;
+                     case 'zoom-out': zoom = 1.1 - progress * 0.1; break;
+                     case 'pan-left': panX = (0.5 - progress) * 0.1; break;
+                     case 'pan-right': panX = (-0.5 + progress) * 0.1; break;
+                     case 'zoom-in-pan-right': zoom = 1.0 + progress * 0.1; panX = (-0.5 + progress) * 0.1; break;
+                     case 'zoom-in-pan-left': zoom = 1.0 + progress * 0.1; panX = (0.5 - progress) * 0.1; break;
+                     case 'zoom-out-pan-right': zoom = 1.1 - progress * 0.1; panX = (-0.5 + progress) * 0.1; break;
+                     case 'zoom-out-pan-left': zoom = 1.1 - progress * 0.1; panX = (0.5 - progress) * 0.1; break;
+                     case 'zoom-in-out': zoom = 1.0 + 0.1 * (1 - Math.abs(progress - 0.5) * 2); break;
+                     case 'zoom-out-in': zoom = 1.1 - 0.1 * (1 - Math.abs(progress - 0.5) * 2); break;
+                 }
+                 
+                 const scale = baseScale * zoom;
+                 const targetWidth = img.naturalWidth * scale;
+                 const targetHeight = img.naturalHeight * scale;
+        
+                 const dx = (canvas.width - targetWidth) / 2 + panX * canvas.width + offsetX;
+                 const dy = (canvas.height - targetHeight) / 2;
+                 
+                 ctx.drawImage(img, dx, dy, targetWidth, targetHeight);
+                 ctx.restore();
+            }
 
-            if (image) {
-                const canvasAspect = canvas.width / canvas.height;
-                const imageAspect = image.naturalWidth / image.naturalHeight;
-                let drawWidth, drawHeight, offsetX, offsetY;
-    
-                if (canvasAspect > imageAspect) {
-                    drawHeight = canvas.height;
-                    drawWidth = drawHeight * imageAspect;
-                    offsetX = (canvas.width - drawWidth) / 2;
-                    offsetY = 0;
-                } else {
-                    drawWidth = canvas.width;
-                    drawHeight = drawWidth / imageAspect;
-                    offsetY = (canvas.height - drawHeight) / 2;
-                    offsetX = 0;
+            const currentClipIndex = timelineClips.findIndex(c => c.id === currentClip!.id);
+            const nextClip = timelineClips[currentClipIndex + 1];
+            const currentImage = clipImageMap.get(currentClip.id);
+
+            const isInTransition = nextClip && transitionDuration > 0 && time > currentClip.end - transitionDuration;
+
+            if (isInTransition) {
+                const transitionProgress = (time - (currentClip.end - transitionDuration)) / transitionDuration;
+                const nextImage = clipImageMap.get(nextClip.id);
+
+                switch (transitionEffect) {
+                    case 'crossfade':
+                        if (currentImage) drawImageWithEffect(currentImage, currentClip, time, 1 - transitionProgress);
+                        if (nextImage) drawImageWithEffect(nextImage, nextClip, time, transitionProgress);
+                        break;
+                    case 'fade-to-black':
+                        if (transitionProgress < 0.5) {
+                            if (currentImage) drawImageWithEffect(currentImage, currentClip, time, 1 - (transitionProgress * 2));
+                        } else {
+                            if (nextImage) drawImageWithEffect(nextImage, nextClip, time, (transitionProgress - 0.5) * 2);
+                        }
+                        break;
+                    case 'wipe-left':
+                        if (currentImage) drawImageWithEffect(currentImage, currentClip, time);
+                        if (nextImage) {
+                            ctx.save();
+                            const wipeX = canvas.width * (1 - transitionProgress);
+                            ctx.beginPath();
+                            ctx.rect(wipeX, 0, canvas.width - wipeX, canvas.height);
+                            ctx.clip();
+                            drawImageWithEffect(nextImage, nextClip, time);
+                            ctx.restore();
+                        }
+                        break;
+                    case 'wipe-right':
+                         if (currentImage) drawImageWithEffect(currentImage, currentClip, time);
+                         if (nextImage) {
+                            ctx.save();
+                            const wipeWidth = canvas.width * transitionProgress;
+                            ctx.beginPath();
+                            ctx.rect(0, 0, wipeWidth, canvas.height);
+                            ctx.clip();
+                            drawImageWithEffect(nextImage, nextClip, time);
+                            ctx.restore();
+                        }
+                        break;
+                    case 'slide-left':
+                        if (currentImage) drawImageWithEffect(currentImage, currentClip, time, 1, -canvas.width * transitionProgress);
+                        if (nextImage) drawImageWithEffect(nextImage, nextClip, time, 1, canvas.width * (1 - transitionProgress));
+                        break;
+                    case 'slide-right':
+                        if (currentImage) drawImageWithEffect(currentImage, currentClip, time, 1, canvas.width * transitionProgress);
+                        if (nextImage) drawImageWithEffect(nextImage, nextClip, time, 1, -canvas.width * (1 - transitionProgress));
+                        break;
+                    default: // 'none'
+                        if (currentImage) drawImageWithEffect(currentImage, currentClip, time);
+                        break;
                 }
-                ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+            } else {
+                if (currentImage) {
+                    drawImageWithEffect(currentImage, currentClip, time, 1);
+                }
             }
         };
+        
 
         if (format === 'video') {
             const stream = canvas.captureStream(24); // fps
@@ -314,7 +408,6 @@ function App() {
             const frameDuration = 1000 / frameRate;
             const totalFrames = Math.floor(totalDuration / frameDuration);
             let frame = 0;
-            let lastDrawnImage: HTMLImageElement | null = null;
             const renderStartTime = performance.now();
 
             const renderVideoFrame = () => {
@@ -323,12 +416,7 @@ function App() {
                     return;
                 }
                 const currentTime = frame * frameDuration;
-                const imageToDraw = findClipForTime(currentTime);
-
-                drawFrame(imageToDraw, lastDrawnImage);
-                if (imageToDraw) {
-                    lastDrawnImage = imageToDraw;
-                }
+                drawFrame(currentTime);
 
                 setRenderProgress((frame / totalFrames) * 100);
                 frame++;
@@ -367,16 +455,10 @@ function App() {
             const totalFrames = Math.ceil(totalDuration / frameDelay);
 
             const addGifFramesAsync = async () => {
-                let lastImage: HTMLImageElement | null = null;
                 for (let i = 0; i < totalFrames; i++) {
                     const time = i * frameDelay;
-                    const imageToDraw = findClipForTime(time);
-                    
-                    drawFrame(imageToDraw, lastImage);
-                    if (imageToDraw) lastImage = imageToDraw;
-                    
+                    drawFrame(time);
                     gif.addFrame(ctx, { copy: true, delay: frameDelay });
-                    
                     setRenderProgress(((i + 1) / totalFrames) * 100);
                     await new Promise(resolve => setTimeout(resolve, 0)); // Yield to main thread
                 }
@@ -438,52 +520,72 @@ function App() {
                 
                 {timelineClips.length > 0 && (
                   <div className="space-y-4">
-                      <Preview clips={timelineClips} currentTime={currentTime} totalDuration={totalDuration} />
+                      <Preview 
+                        clips={timelineClips} 
+                        currentTime={currentTime} 
+                        totalDuration={totalDuration}
+                        zoomEffect={zoomEffect}
+                        transitionEffect={transitionEffect}
+                      />
                       <Timeline clips={timelineClips} totalDuration={totalDuration} currentTime={currentTime} onTimeChange={setCurrentTime} isPlaying={isPlaying} onPlayPause={handlePlayPause}/>
+                      
+                      <div className="mt-6 p-6 bg-gray-800 rounded-lg shadow-lg">
+                          <h3 className="text-xl font-semibold mb-4 text-center">Effects & Export</h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+                              <div>
+                                  <label htmlFor="zoom-effect" className="block mb-2 text-sm font-medium text-gray-300">Image Effect</label>
+                                  <select id="zoom-effect" value={zoomEffect} onChange={(e) => setZoomEffect(e.target.value as ZoomEffect)} className="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5">
+                                      <option value="none">None</option>
+                                      <option value="zoom-in">Zoom In</option>
+                                      <option value="zoom-out">Zoom Out</option>
+                                      <option value="pan-left">Pan Left</option>
+                                      <option value="pan-right">Pan Right</option>
+                                      <option value="zoom-in-pan-left">Zoom In & Pan Left</option>
+                                      <option value="zoom-in-pan-right">Zoom In & Pan Right</option>
+                                      <option value="zoom-out-pan-left">Zoom Out & Pan Left</option>
+                                      <option value="zoom-out-pan-right">Zoom Out & Pan Right</option>
+                                      <option value="zoom-in-out">Zoom In then Out</option>
+                                      <option value="zoom-out-in">Zoom Out then In</option>
+                                  </select>
+                              </div>
+                              <div>
+                                  <label htmlFor="transition-effect" className="block mb-2 text-sm font-medium text-gray-300">Transition</label>
+                                  <select id="transition-effect" value={transitionEffect} onChange={(e) => setTransitionEffect(e.target.value as TransitionEffect)} className="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5">
+                                      <option value="none">Cut</option>
+                                      <option value="crossfade">Crossfade</option>
+                                      <option value="fade-to-black">Fade to Black</option>
+                                      <option value="wipe-left">Wipe Left</option>
+                                      <option value="wipe-right">Wipe Right</option>
+                                      <option value="slide-left">Slide Left</option>
+                                      <option value="slide-right">Slide Right</option>
+                                  </select>
+                              </div>
+                          </div>
+              
+                          <div className="border-t border-gray-700 pt-6">
+                              <div className="flex items-center justify-center mb-4">
+                                  <input type="checkbox" id="green-screen-checkbox" checked={useGreenScreen} onChange={(e) => setUseGreenScreen(e.target.checked)} className="w-4 h-4 text-green-500 bg-gray-700 border-gray-600 rounded focus:ring-green-600 ring-offset-gray-800 focus:ring-2" />
+                                  <label htmlFor="green-screen-checkbox" className="ml-2 text-sm font-medium text-gray-300">Use Green Screen Background</label>
+                              </div>
+                              <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
+                                  <button onClick={() => handleDownload('video')} disabled={!!isRendering} className="w-full sm:w-auto flex items-center justify-center px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-all disabled:bg-gray-500 disabled:cursor-not-allowed">
+                                      <DownloadIcon />
+                                      {isRendering === 'video' ? `Rendering... (${Math.round(renderProgress)}%)` : `Download Video (${supportedVideoFormat.extension.toUpperCase()})`}
+                                  </button>
+                                  <button onClick={() => handleDownload('gif')} disabled={!!isRendering} className="w-full sm:w-auto flex items-center justify-center px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-all disabled:bg-gray-500 disabled:cursor-not-allowed">
+                                      <DownloadIcon />
+                                      {isRendering === 'gif' ? `Rendering... (${Math.round(renderProgress)}%)` : 'Download GIF'}
+                                  </button>
+                              </div>
+                              {isRendering && (
+                                  <div className="w-full bg-gray-700 rounded-full h-2.5 mt-4">
+                                      <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-150" style={{ width: `${renderProgress}%` }}></div>
+                                  </div>
+                              )}
+                          </div>
+                      </div>
                   </div>
                 )}
-                 
-                {timelineClips.length > 0 && (
-                    <div className="mt-6 p-6 bg-gray-800 rounded-lg shadow-lg">
-                        <h3 className="text-xl font-semibold mb-4 text-center">Export Timeline</h3>
-                        <div className="flex items-center justify-center mb-4">
-                            <input
-                                type="checkbox"
-                                id="green-screen-checkbox"
-                                checked={useGreenScreen}
-                                onChange={(e) => setUseGreenScreen(e.target.checked)}
-                                className="w-4 h-4 text-green-500 bg-gray-700 border-gray-600 rounded focus:ring-green-600 ring-offset-gray-800 focus:ring-2"
-                            />
-                            <label htmlFor="green-screen-checkbox" className="ml-2 text-sm font-medium text-gray-300">
-                                Use Green Screen Background
-                            </label>
-                        </div>
-                        <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
-                            <button
-                                onClick={() => handleDownload('video')}
-                                disabled={!!isRendering}
-                                className="w-full sm:w-auto flex items-center justify-center px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-all disabled:bg-gray-500 disabled:cursor-not-allowed"
-                            >
-                                <DownloadIcon />
-                                {isRendering === 'video' ? `Rendering... (${Math.round(renderProgress)}%)` : `Download Video (${supportedVideoFormat.extension.toUpperCase()})`}
-                            </button>
-                            <button
-                                onClick={() => handleDownload('gif')}
-                                disabled={!!isRendering}
-                                className="w-full sm:w-auto flex items-center justify-center px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-all disabled:bg-gray-500 disabled:cursor-not-allowed"
-                            >
-                                <DownloadIcon />
-                                {isRendering === 'gif' ? `Rendering... (${Math.round(renderProgress)}%)` : 'Download GIF'}
-                            </button>
-                        </div>
-                        {isRendering && (
-                            <div className="w-full bg-gray-700 rounded-full h-2.5 mt-4">
-                                <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-150" style={{ width: `${renderProgress}%` }}></div>
-                            </div>
-                        )}
-                    </div>
-                )}
-
             </main>
         </div>
     </div>
