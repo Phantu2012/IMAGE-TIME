@@ -1,12 +1,11 @@
 /// <reference lib="dom" />
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { TimelineClip, CsvRow, ZoomEffect, TransitionEffect, SubtitleClip } from './types';
+import { TimelineClip, CsvRow, ZoomEffect, TransitionEffect } from './types';
 import { FileUploader } from './components/FileUploader';
 import { Timeline } from './components/Timeline';
 import { Preview } from './components/Preview';
-import { CsvIcon, FilmIcon, DownloadIcon, AudioIcon, SubtitleIcon } from './components/Icons';
-import { SubtitleEditor } from './components/SubtitleEditor';
+import { CsvIcon, FilmIcon, DownloadIcon } from './components/Icons';
 
 // Add type declaration for gif.js loaded from CDN
 declare const GIF: any;
@@ -14,13 +13,7 @@ declare const GIF: any;
 function App() {
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [srtFile, setSrtFile] = useState<File | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string>('');
-  const [audioDurationMs, setAudioDurationMs] = useState<number>(0);
   const [timelineClips, setTimelineClips] = useState<TimelineClip[]>([]);
-  const [subtitles, setSubtitles] = useState<SubtitleClip[]>([]);
-  const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null);
   const [error, setError] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [totalDuration, setTotalDuration] = useState<number>(0);
@@ -36,7 +29,6 @@ function App() {
   
   const animationFrameRef = useRef<number | undefined>(undefined);
   const lastTimeRef = useRef<number | undefined>(undefined);
-  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     const mp4MimeType = 'video/mp4; codecs=avc1.42E01E';
@@ -61,29 +53,6 @@ function App() {
       setCsvFile(files[0]);
       setTimelineClips([]);
       setError('');
-    }
-  }, []);
-  
-  const handleSrtSelection = useCallback((files: File[]) => {
-    if (files.length > 0) {
-        setSrtFile(files[0]);
-        setError('');
-    }
-  }, []);
-
-  const handleAudioSelection = useCallback((files: File[]) => {
-    if (files.length > 0) {
-        const file = files[0];
-        setAudioFile(file);
-        const url = URL.createObjectURL(file);
-        setAudioUrl(url);
-        if (audioRef.current) {
-            audioRef.current.src = url;
-            audioRef.current.onloadedmetadata = () => {
-                setAudioDurationMs(audioRef.current!.duration * 1000);
-            };
-        }
-        setError('');
     }
   }, []);
 
@@ -112,49 +81,6 @@ function App() {
 
     return (hours * 3600 + minutes * 60 + seconds) * 1000 + milliseconds;
   };
-  
-  const parseSrtTimestamp = (time: string): number => {
-    const parts = time.split(/[:,]/);
-    const hours = parseInt(parts[0], 10);
-    const minutes = parseInt(parts[1], 10);
-    const seconds = parseInt(parts[2], 10);
-    const milliseconds = parseInt(parts[3], 10);
-    return (hours * 3600 + minutes * 60 + seconds) * 1000 + milliseconds;
-  };
-
-  const parseSrt = (srtText: string): Omit<SubtitleClip, 'id' | keyof ReturnType<typeof getDefaultSubtitleStyles>>[] => {
-    const subs: Omit<SubtitleClip, 'id' | keyof ReturnType<typeof getDefaultSubtitleStyles>>[] = [];
-    const blocks = srtText.trim().split(/\r?\n\r?\n/);
-    
-    for (const block of blocks) {
-      const lines = block.split(/\r?\n/);
-      if (lines.length >= 3) {
-        const timeLine = lines[1];
-        const timeMatch = timeLine.match(/(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/);
-        if (timeMatch) {
-          const start = parseSrtTimestamp(timeMatch[1]);
-          const end = parseSrtTimestamp(timeMatch[2]);
-          const text = lines.slice(2).join('\n');
-          subs.push({ text, start, end });
-        }
-      }
-    }
-    return subs;
-  };
-
-  const getDefaultSubtitleStyles = () => ({
-    fontSize: 48,
-    fontFamily: 'Arial',
-    color: '#ffffff',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    textAlign: 'center' as const,
-    x: 0.5,
-    y: 0.9,
-    animation: 'none' as const,
-    enableShadow: true,
-    strokeColor: '#000000',
-    strokeWidth: 2,
-  });
 
   const processFiles = useCallback(async () => {
     if (imageFiles.length === 0 || !csvFile) {
@@ -164,8 +90,6 @@ function App() {
     setIsLoading(true);
     setError('');
     setTimelineClips([]);
-    setSubtitles([]);
-    setSelectedSubtitleId(null);
 
     try {
       const csvText = await csvFile.text();
@@ -211,6 +135,7 @@ function App() {
         }
 
         const start = parseTimestamp(row.startTime);
+        // Default duration of 5 seconds for the last clip
         const end = i < csvData.length - 1 ? parseTimestamp(csvData[i+1].startTime) : start + 5000;
         
         if (isNaN(start) || isNaN(end) || start >= end) {
@@ -232,30 +157,10 @@ function App() {
         throw new Error("No valid timeline clips could be generated. Please check your files for correct formatting and matching STT numbers.");
       }
 
-      let finalDuration = clips.length > 0 ? clips[clips.length - 1].end : 0;
-
-      // Adjust duration based on audio file
-      if (audioDurationMs > 0 && audioDurationMs > finalDuration) {
-          const lastClip = clips[clips.length - 1];
-          lastClip.end = audioDurationMs;
-          lastClip.duration = lastClip.end - lastClip.start;
-          finalDuration = audioDurationMs;
-      }
+      const finalDuration = clips.length > 0 ? clips[clips.length - 1].end : 0;
       
       setTimelineClips(clips);
       setTotalDuration(finalDuration);
-
-      // Process SRT file if it exists
-      if (srtFile) {
-        const srtText = await srtFile.text();
-        const parsedSubs = parseSrt(srtText);
-        const fullSubtitles = parsedSubs.map((sub, index) => ({
-            ...sub,
-            id: `srt_${Date.now()}_${index}`,
-            ...getDefaultSubtitleStyles(),
-        }));
-        setSubtitles(fullSubtitles);
-      }
 
       setCurrentTime(0);
       setIsPlaying(false);
@@ -265,7 +170,7 @@ function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [imageFiles, csvFile, srtFile, audioDurationMs]);
+  }, [imageFiles, csvFile]);
 
   const animate = useCallback((time: number) => {
     if (lastTimeRef.current === undefined) {
@@ -289,12 +194,10 @@ function App() {
     if (isPlaying) {
         lastTimeRef.current = performance.now();
         animationFrameRef.current = requestAnimationFrame(animate);
-        audioRef.current?.play();
     } else {
         if(animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
         }
-        audioRef.current?.pause();
     }
     return () => {
         if(animationFrameRef.current) {
@@ -306,9 +209,6 @@ function App() {
   const handlePlayPause = () => {
       if (currentTime >= totalDuration) {
           setCurrentTime(0);
-          if (audioRef.current) {
-              audioRef.current.currentTime = 0;
-          }
           setIsPlaying(true);
       } else {
         setIsPlaying(prev => !prev);
@@ -317,34 +217,7 @@ function App() {
 
   const handleTimeChange = (newTime: number) => {
     setCurrentTime(newTime);
-    if (audioRef.current) {
-        audioRef.current.currentTime = newTime / 1000;
-    }
   };
-
-  const handleAddSubtitle = useCallback(() => {
-    const newSubtitle: SubtitleClip = {
-        id: `sub_${Date.now()}`,
-        text: 'New Subtitle',
-        start: currentTime,
-        end: Math.min(currentTime + 3000, totalDuration),
-        ...getDefaultSubtitleStyles()
-    };
-    setSubtitles(prev => [...prev, newSubtitle]);
-    setSelectedSubtitleId(newSubtitle.id);
-  }, [currentTime, totalDuration]);
-
-  const handleUpdateSubtitle = useCallback((id: string, updates: Partial<SubtitleClip>) => {
-    setSubtitles(prev => prev.map(sub => sub.id === id ? { ...sub, ...updates } : sub));
-  }, []);
-  
-  const handleDeleteSubtitle = useCallback((id: string) => {
-    setSubtitles(prev => prev.filter(sub => sub.id !== id));
-    if (selectedSubtitleId === id) {
-        setSelectedSubtitleId(null);
-    }
-  }, [selectedSubtitleId]);
-
 
   const handleDownload = async (format: 'video' | 'gif') => {
     if (timelineClips.length === 0 || isRendering) return;
@@ -406,70 +279,6 @@ function App() {
             clipImageMap.set(clip.id, images[index]);
         });
         
-        const drawSubtitles = (ctx: CanvasRenderingContext2D, time: number) => {
-            const activeSubtitles = subtitles.filter(sub => time >= sub.start && time < sub.end);
-        
-            activeSubtitles.forEach(sub => {
-                ctx.save();
-        
-                const scaledFontSize = sub.fontSize * (canvas.height / 720); // Scale font size based on a 720p height reference
-                ctx.font = `${scaledFontSize}px ${sub.fontFamily}`;
-                ctx.textAlign = sub.textAlign as CanvasTextAlign;
-                ctx.fillStyle = sub.color;
-                ctx.textBaseline = 'bottom';
-        
-                const x = sub.x * canvas.width;
-                const y = sub.y * canvas.height; 
-        
-                let textToDraw = sub.text;
-                let alpha = 1.0;
-        
-                if (sub.animation === 'fade') {
-                    const fadeDuration = 300;
-                    if (time < sub.start + fadeDuration) alpha = (time - sub.start) / fadeDuration;
-                    else if (time > sub.end - fadeDuration) alpha = (sub.end - time) / fadeDuration;
-                } else if (sub.animation === 'typewriter') {
-                    const charsPerSecond = 25;
-                    const elapsed = time - sub.start;
-                    const charsToShow = Math.min(sub.text.length, Math.floor((elapsed / 1000) * charsPerSecond));
-                    textToDraw = sub.text.substring(0, charsToShow);
-                }
-        
-                ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-        
-                if (sub.backgroundColor && sub.backgroundColor !== 'rgba(0, 0, 0, 0)') {
-                    const textMetrics = ctx.measureText(textToDraw);
-                    const padding = scaledFontSize * 0.2;
-                    let bgX = x;
-                    if (sub.textAlign === 'center') bgX -= textMetrics.width / 2;
-                    else if (sub.textAlign === 'right') bgX -= textMetrics.width;
-                    const bgY = y - scaledFontSize - padding;
-                    const bgWidth = textMetrics.width + padding * 2;
-                    const bgHeight = scaledFontSize + padding * 2;
-                    ctx.fillStyle = sub.backgroundColor;
-                    ctx.fillRect(bgX - padding, bgY, bgWidth, bgHeight);
-                }
-
-                if (sub.enableShadow) {
-                    ctx.shadowColor = 'rgba(0,0,0,0.75)';
-                    ctx.shadowBlur = scaledFontSize * 0.1;
-                    ctx.shadowOffsetX = scaledFontSize * 0.05;
-                    ctx.shadowOffsetY = scaledFontSize * 0.05;
-                }
-
-                if (sub.strokeWidth > 0) {
-                    ctx.strokeStyle = sub.strokeColor;
-                    ctx.lineWidth = sub.strokeWidth * (scaledFontSize / 48);
-                    ctx.strokeText(textToDraw, x, y);
-                }
-        
-                ctx.fillStyle = sub.color;
-                ctx.fillText(textToDraw, x, y);
-        
-                ctx.restore();
-            });
-        };
-
         const drawFrame = (time: number) => {
             ctx.fillStyle = backgroundColor;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -581,33 +390,11 @@ function App() {
                     drawImageWithEffect(currentImage, currentClip, time, 1);
                 }
             }
-            drawSubtitles(ctx, time);
         };
         
         if (format === 'video') {
-            let stream: MediaStream;
-            let audioContext: AudioContext | null = null;
-            let audioSourceNode: AudioBufferSourceNode | null = null;
             const videoStream = canvas.captureStream(24); 
-
-            if (audioFile) {
-                try {
-                    audioContext = new AudioContext();
-                    const audioBuffer = await audioContext.decodeAudioData(await audioFile.arrayBuffer());
-                    audioSourceNode = audioContext.createBufferSource();
-                    audioSourceNode.buffer = audioBuffer;
-                    const audioDestination = audioContext.createMediaStreamDestination();
-                    audioSourceNode.connect(audioDestination);
-                    const audioTracks = audioDestination.stream.getAudioTracks();
-                    stream = new MediaStream([...videoStream.getVideoTracks(), ...audioTracks]);
-                } catch (audioError) {
-                    console.error("Failed to process audio file. Exporting video without audio.", audioError);
-                    setError("Couldn't process audio. Exporting video without sound.");
-                    stream = videoStream;
-                }
-            } else {
-                stream = videoStream;
-            }
+            const stream = videoStream;
 
             const recorder = new MediaRecorder(stream, { 
               mimeType: supportedVideoFormat.mimeType,
@@ -627,10 +414,8 @@ function App() {
                 document.body.removeChild(a);
                 setIsRendering(null);
                 setRenderProgress(0);
-                audioContext?.close();
             };
             recorder.start();
-            audioSourceNode?.start(0);
 
             const frameRate = 24;
             const frameDuration = 1000 / frameRate;
@@ -709,7 +494,7 @@ function App() {
             </header>
 
             <main>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
                     <FileUploader
                         id="image-upload"
                         label="Image files (e.g., 1.png, 2.png...)"
@@ -725,22 +510,6 @@ function App() {
                         multiple={false}
                         onFilesSelected={handleCsvSelection}
                         icon={<CsvIcon />}
-                    />
-                    <FileUploader
-                        id="audio-upload"
-                        label="Audio file (optional)"
-                        accept="audio/*"
-                        multiple={false}
-                        onFilesSelected={handleAudioSelection}
-                        icon={<AudioIcon />}
-                    />
-                     <FileUploader
-                        id="srt-upload"
-                        label="Subtitle file (*.srt, optional)"
-                        accept=".srt"
-                        multiple={false}
-                        onFilesSelected={handleSrtSelection}
-                        icon={<SubtitleIcon />}
                     />
                 </div>
 
@@ -760,28 +529,13 @@ function App() {
                   <div className="space-y-4">
                       <Preview 
                         clips={timelineClips} 
-                        subtitles={subtitles}
                         currentTime={currentTime} 
                         totalDuration={totalDuration}
                         zoomEffect={zoomEffect}
                         transitionEffect={transitionEffect}
-                        onUpdateSubtitle={handleUpdateSubtitle}
-                        onSelectSubtitle={setSelectedSubtitleId}
-                        selectedSubtitleId={selectedSubtitleId}
                       />
-                      {/* Fix: Corrected typo from handleTimechange to handleTimeChange */}
                       <Timeline clips={timelineClips} totalDuration={totalDuration} currentTime={currentTime} onTimeChange={handleTimeChange} isPlaying={isPlaying} onPlayPause={handlePlayPause}/>
                       
-                      <SubtitleEditor
-                        subtitles={subtitles}
-                        onAddSubtitle={handleAddSubtitle}
-                        onUpdateSubtitle={handleUpdateSubtitle}
-                        onDeleteSubtitle={handleDeleteSubtitle}
-                        onSelectSubtitle={setSelectedSubtitleId}
-                        selectedSubtitleId={selectedSubtitleId}
-                        currentTime={currentTime}
-                      />
-
                       <div className="mt-6 p-6 bg-gray-800 rounded-lg shadow-lg">
                           <h3 className="text-xl font-semibold mb-4 text-center">Effects & Export</h3>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
@@ -855,7 +609,6 @@ function App() {
                 )}
             </main>
         </div>
-        <audio ref={audioRef} src={audioUrl} style={{ display: 'none' }} onEnded={() => setIsPlaying(false)} />
     </div>
   );
 }

@@ -14,28 +14,22 @@ export interface TimelineClip {
   name: string;
 }
 
+// Fix: Add missing SubtitleClip interface.
 export interface SubtitleClip {
-  id:string;
+  id: string;
   text: string;
-  start: number; // in ms
-  end: number;   // in ms
-  
-  fontSize: number; // in px
+  start: number; // in milliseconds
+  end: number;   // in milliseconds
   fontFamily: string;
-  color: string; // hex color
-  backgroundColor: string; // rgba color
+  fontSize: number;
+  color: string;
+  backgroundColor: string;
   textAlign: 'left' | 'center' | 'right';
-  x: number; // 0 to 1, relative horizontal position
-  y: number; // 0 to 1, relative vertical position
-  
   animation: 'none' | 'fade' | 'typewriter';
-
-  // New styling properties
-  enableShadow: boolean;
-  strokeColor: string;
   strokeWidth: number;
+  strokeColor: string;
+  enableShadow: boolean;
 }
-
 
 export type ZoomEffect = 'none' | 'zoom-in' | 'zoom-out' | 'pan-left' | 'pan-right' | 'zoom-in-pan-right' | 'zoom-in-pan-left' | 'zoom-out-pan-right' | 'zoom-out-pan-left' | 'zoom-in-out' | 'zoom-out-in';
 export type TransitionEffect = 'none' | 'crossfade' | 'fade-to-black' | 'wipe-left' | 'wipe-right' | 'slide-left' | 'slide-right';

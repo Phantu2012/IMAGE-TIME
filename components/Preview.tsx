@@ -1,17 +1,14 @@
 
+
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { TimelineClip, ZoomEffect, TransitionEffect, SubtitleClip } from '../types';
+import { TimelineClip, ZoomEffect, TransitionEffect } from '../types';
 
 interface PreviewProps {
   clips: TimelineClip[];
-  subtitles: SubtitleClip[];
   currentTime: number; // in milliseconds
   totalDuration: number;
   zoomEffect: ZoomEffect;
   transitionEffect: TransitionEffect;
-  onUpdateSubtitle: (id: string, updates: Partial<SubtitleClip>) => void;
-  onSelectSubtitle: (id: string | null) => void;
-  selectedSubtitleId: string | null;
 }
 
 const formatTime = (ms: number): string => {
@@ -62,99 +59,12 @@ const useImagePreloader = (clipSrcs: string[]) => {
     return { images, isLoading };
 };
 
-export const Preview: React.FC<PreviewProps> = ({ clips, subtitles, currentTime, totalDuration, zoomEffect, transitionEffect, onUpdateSubtitle, onSelectSubtitle, selectedSubtitleId }) => {
+export const Preview: React.FC<PreviewProps> = ({ clips, currentTime, totalDuration, zoomEffect, transitionEffect }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [draggingSubtitle, setDraggingSubtitle] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
   
   const clipSrcs = useMemo(() => clips.map(c => c.src), [clips]);
   const { images, isLoading } = useImagePreloader(clipSrcs);
   
-  // Mouse handlers for dragging subtitles
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const getSubtitleBoundingBox = (sub: SubtitleClip, ctx: CanvasRenderingContext2D): { x: number; y: number; width: number; height: number } => {
-        const scaledFontSize = sub.fontSize * (canvas.height / 720);
-        ctx.font = `${scaledFontSize}px ${sub.fontFamily}`;
-        const textMetrics = ctx.measureText(sub.text);
-        const padding = scaledFontSize * 0.2;
-        const boxWidth = textMetrics.width + padding * 2;
-        const boxHeight = scaledFontSize + padding * 2;
-        
-        let boxX = sub.x * canvas.width;
-        if (sub.textAlign === 'center') boxX -= boxWidth / 2;
-        else if (sub.textAlign === 'right') boxX -= boxWidth;
-
-        const boxY = sub.y * canvas.height - scaledFontSize - padding;
-        return { x: boxX, y: boxY, width: boxWidth, height: boxHeight };
-    };
-
-    const handleMouseDown = (event: MouseEvent) => {
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = event.clientX - rect.left;
-      const mouseY = event.clientY - rect.top;
-
-      const activeSubtitles = subtitles.filter(sub => currentTime >= sub.start && currentTime < sub.end);
-      
-      let clickedOnSubtitle = false;
-      for (const sub of [...activeSubtitles].reverse()) {
-        const box = getSubtitleBoundingBox(sub, ctx);
-        if (mouseX >= box.x && mouseX <= box.x + box.width && mouseY >= box.y && mouseY <= box.y + box.height) {
-          onSelectSubtitle(sub.id);
-          setDraggingSubtitle({
-            id: sub.id,
-            offsetX: mouseX - sub.x * canvas.width,
-            offsetY: mouseY - sub.y * canvas.height,
-          });
-          clickedOnSubtitle = true;
-          canvas.style.cursor = 'move';
-          break;
-        }
-      }
-
-      if (!clickedOnSubtitle && selectedSubtitleId) {
-          onSelectSubtitle(null);
-      }
-    };
-
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!draggingSubtitle) return;
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = event.clientX - rect.left;
-      const mouseY = event.clientY - rect.top;
-
-      const newAbsoluteX = mouseX - draggingSubtitle.offsetX;
-      const newAbsoluteY = mouseY - draggingSubtitle.offsetY;
-      
-      const newRelativeX = Math.max(0, Math.min(1, newAbsoluteX / canvas.width));
-      const newRelativeY = Math.max(0, Math.min(1, newAbsoluteY / canvas.height));
-
-      onUpdateSubtitle(draggingSubtitle.id, {
-        x: newRelativeX,
-        y: newRelativeY,
-      });
-    };
-
-    const handleMouseUp = () => {
-      setDraggingSubtitle(null);
-      canvas.style.cursor = 'default';
-    };
-
-    canvas.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      canvas.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [subtitles, currentTime, onUpdateSubtitle, onSelectSubtitle, draggingSubtitle, selectedSubtitleId]);
-
-
   // Main drawing effect
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -299,82 +209,7 @@ export const Preview: React.FC<PreviewProps> = ({ clips, subtitles, currentTime,
         }
     }
 
-    const drawSubtitles = (ctx: CanvasRenderingContext2D, time: number) => {
-        const activeSubtitles = subtitles.filter(sub => time >= sub.start && time < sub.end);
-    
-        activeSubtitles.forEach(sub => {
-            ctx.save();
-    
-            const scaledFontSize = sub.fontSize * (canvas.height / 720);
-            ctx.font = `${scaledFontSize}px ${sub.fontFamily}`;
-            ctx.textAlign = sub.textAlign as CanvasTextAlign;
-            ctx.fillStyle = sub.color;
-            ctx.textBaseline = 'bottom';
-    
-            const x = sub.x * canvas.width;
-            const y = sub.y * canvas.height; 
-    
-            let textToDraw = sub.text;
-            let alpha = 1.0;
-    
-            if (sub.animation === 'fade') {
-                const fadeDuration = 300;
-                if (time < sub.start + fadeDuration) alpha = (time - sub.start) / fadeDuration;
-                else if (time > sub.end - fadeDuration) alpha = (sub.end - time) / fadeDuration;
-            } else if (sub.animation === 'typewriter') {
-                const charsPerSecond = 25;
-                const elapsed = time - sub.start;
-                const charsToShow = Math.min(sub.text.length, Math.floor((elapsed / 1000) * charsPerSecond));
-                textToDraw = sub.text.substring(0, charsToShow);
-            }
-    
-            ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-            
-            const textMetrics = ctx.measureText(textToDraw);
-            const padding = scaledFontSize * 0.2;
-            const bgHeight = scaledFontSize + padding * 2;
-            const bgWidth = textMetrics.width + padding * 2;
-            let bgX = x;
-            if (sub.textAlign === 'center') bgX -= textMetrics.width / 2;
-            else if (sub.textAlign === 'right') bgX -= textMetrics.width;
-            const bgY = y - scaledFontSize - padding;
-    
-            if (sub.backgroundColor && sub.backgroundColor !== 'rgba(0, 0, 0, 0)') {
-                ctx.fillStyle = sub.backgroundColor;
-                ctx.fillRect(bgX - padding, bgY, bgWidth, bgHeight);
-            }
-    
-            if (sub.id === selectedSubtitleId && !draggingSubtitle) {
-                ctx.strokeStyle = 'rgba(79, 70, 229, 0.8)';
-                ctx.lineWidth = 2;
-                ctx.setLineDash([6, 4]);
-                ctx.strokeRect(bgX - padding, bgY, bgWidth, bgHeight);
-                ctx.setLineDash([]);
-            }
-
-            if (sub.enableShadow) {
-                ctx.shadowColor = 'rgba(0,0,0,0.75)';
-                ctx.shadowBlur = scaledFontSize * 0.1;
-                ctx.shadowOffsetX = scaledFontSize * 0.05;
-                ctx.shadowOffsetY = scaledFontSize * 0.05;
-            }
-
-            if (sub.strokeWidth > 0) {
-                ctx.strokeStyle = sub.strokeColor;
-                ctx.lineWidth = sub.strokeWidth * (scaledFontSize / 48);
-                ctx.strokeText(textToDraw, x, y);
-            }
-
-            ctx.fillStyle = sub.color;
-            ctx.fillText(textToDraw, x, y);
-    
-            ctx.restore();
-        });
-    };
-
-    drawSubtitles(ctx, currentTime);
-
-  }, [clips, subtitles, currentTime, totalDuration, zoomEffect, transitionEffect, images, isLoading, selectedSubtitleId, draggingSubtitle]);
+  }, [clips, currentTime, totalDuration, zoomEffect, transitionEffect, images, isLoading]);
 
 
   return (
